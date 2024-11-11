@@ -55,6 +55,14 @@ Main function that performs the entire analysis pipeline:
 - None.
 """
 function run()
+    load_and_preprocess_data_pixhawk(
+        "T53FlightPixhawk.csv", 
+        "tags.csv", 
+        "constants.csv",
+        ["control.csv", "fuel.csv", "instrumentation.csv"],
+        [0]
+    )
+    #=
     # Load and preprocess data
     file_path = joinpath(@__DIR__, "data", "Rollercoasters_20240821.csv")
     filename = file_path
@@ -123,7 +131,10 @@ function run()
 
     # CM Prediction plot
     CM_prediction_plot(data, event_numbers, time, X, Θ, μf_unscaled, σf_unscaled, C_m)
+    =#
 end
+
+run()
 
 export
     run,

@@ -95,6 +95,235 @@ function load_and_preprocess_data(filename::String, event_numbers::Vector{Int})
 end
 
 """
+    load_and_preprocess_data_pixhawk(pixhawk::String, logical_files::Vector{Int}) -> (data, ...)
+
+Load and preprocess flight test data from a CSV file, filtering by event numbers.
+
+# Arguments
+- `pixhawk`: Path to the CSV file containing the pixhawk data.
+- 'logical_files': Vector of paths to csv files containing supplemental GPS-timed data
+- `event_numbers`: Vector of event numbers to filter the data.
+
+# Returns
+- `data`: DataFrame containing the filtered data with additional computed columns.
+- Extracted and computed variables such as `time`, `alpha_rad`, `mach`, `airspeed`, etc.
+"""
+function load_and_preprocess_data_pixhawk(
+        pixhawk::String, 
+        tags_file::String,
+        constants_file::String,
+        logical_files::Vector{String},
+        event_numbers::Vector{Int}
+    )
+    # Open and read the single pixhawk file
+    disorganized = CSV.read(joinpath(@__DIR__, "data", "pixhawk", pixhawk), DataFrame)
+    # Open and read each logical csv
+    logical = CSV.read.(joinpath.(@__DIR__, "data", "pixhawk", logical_files), DataFrame)
+    # Open and read the tags csv
+    tags = CSV.read(joinpath.(@__DIR__, "data", "pixhawk", tags_file), DataFrame)
+    # Open and read constants file and process into dictionary
+    constants_frame = CSV.read(joinpath.(@__DIR__, "data", "pixhawk", constants_file), DataFrame)
+    constants = Dict(name => constants_frame[!, name][1] for name = names(constants_frame))
+
+
+    # Parameters of interest in pixhawk data file
+    # Format (RowName, [(Col1Index, Param1Alias), (Col2Index, Param2Alias)...])
+    dis_interest = Dict{String, Vector{Tuple{Int64, String}}}([
+        ("IMU", [(1, "P"), (2, "Q"), (3, "R"), (6, "z_accel")]),
+        ("ATT", [(2, "roll"), (4, "pitch")]),
+        ("BARO", [(1, "press_alt")]),
+        ("GPS", [(9, "gs"), (10, "track")])
+    ])
+
+    # Parameters of interest in the logical csv input files, regardless of which file they're in
+    # Format (CSVColumnName, ParameterAlias)
+    log_interest = Dict{String, String}([
+        ("stab_pos", "stab_pos"),
+        ("aoa", "aoa"),
+        ("left_fuel_qty", "left_fuel_qty"),
+        ("right_fuel_qty", "right_fuel_qty"),
+        ("temp", "temp")
+    ])
+
+    # Define computed properties from extracted data
+    function computed_properties!(data)
+        # Atmospheric properties
+        data["isa_temp"] = [ISAdata(alt)[3] - 273.15 for alt = data["press_alt"]]
+        data["density_alt"] = data["press_alt"] + (120 * (data["temp"] .- data["isa_temp"]))
+        data["rho"] = [ISAdata(data["density_alt"][i])[1] for i in 1:length(data["density_alt"])] .* kgm3_to_slugft3
+
+        # Convert extracted data to radians
+        data["P_rad"] = deg2rad.(data["P"])
+        data["Q_rad"] = deg2rad.(data["Q"])
+        data["R_rad"] = deg2rad.(data["R"])
+        data["roll_rad"] = deg2rad.(data["roll"])
+        data["pitch_rad"] = deg2rad.(data["pitch"])
+        data["alpha_rad"] = deg2rad.(data["aoa"])
+        data["stab_pos_rad"] = deg2rad.(data["stab_pos"])
+
+        # Remove bias from P, Q, and R
+        data["P_rad"] .-= mean(data["P_rad"][1:10])
+        data["Q_rad"] .-= mean(data["Q_rad"][1:10])
+        data["R_rad"] .-= mean(data["R_rad"][1:10])
+
+        # Calculate airspeed from gs and wind
+        wind_run = [
+            [data["gs"][i] * cosd(data["track"][i]), data["gs"][i] * sind(data["track"][i])]
+            for (i, event) = enumerate(data["event"]) if event == 6155797356
+        ]
+        windless_vector = [
+            constants["wr_airspeed"] * cosd(constants["wr_heading"]),
+            constants["wr_airspeed"] * sind(constants["wr_heading"])
+        ]
+        wind_vectors = [[track_vector[1] - windless_vector[1], track_vector[2] - windless_vector[2]] for track_vector = wind_run]
+        wind_vector = [mean([w[1] for w = wind_vectors]), mean([w[2] for w = wind_vectors])]
+        airspeed_vectors = [
+            [gs * cosd(track) - wind_vector[1], gs * sind(track) - wind_vector[2]]
+            for (gs, track) = zip(data["gs"], data["track"])
+        ]
+        #println(airspeed_vectors)
+        data["airspeed"] = [sqrt(v[1]^2 + v[2]^2) for v = airspeed_vectors]
+
+        # Compute dynamic pressure from density and airspeed in ft/s
+        data["V_ft_s"] = data["airspeed"] .* knot_to_ft_s
+        data["dyn_press"] = 0.5 .* data["rho"] .* (data["V_ft_s"]).^2
+
+        # Calculate mach from airspeed and speed of sound
+        data["mach"] = data["airspeed"] ./ compute_speed_of_sound.(data["temp"] .+ 273.15)
+
+        # Calculate weights from fuel burns and empty weight
+        data["fuel_weight"] = data["right_fuel_qty"] .+ data["left_fuel_qty"]
+        data["total_weight"] = data["fuel_weight"] .+ constants["unfueled_weight"]
+    end
+
+    # System to GPS time offset
+    offset = missing;
+
+    # Reorganize data points for each interest parameter into vectors of (time, data) ordered pairs
+    aligned = Dict{String, Vector{Tuple{Float64, Float64}}}()
+    keys = Vector{String}()
+    for row = eachrow(disorganized)
+
+        # Pull the time and row name for the current row
+        id = row[1]
+        time = row[2]
+
+        # Find first GPS data point and calculate offset
+        if (id == "GPS") && (offset === missing)
+            gps_ms = parse(Float64, row[4])
+            offset = gps_ms * 1000 - time
+        end
+
+        # Check whether any parameters of interest are associated with this row
+        # If so, extract the data point for that parameter and add to the vector
+        for item = get(dis_interest, id, Vector{Tuple{Int64, String}}([]))
+            value::Float64 = parse(Float64, row[item[1] + 2])
+            name = item[2]
+
+            # Check for key and initialize vector if not already present, otherwise add to vector
+            if get(aligned, name, missing) !== missing
+                push!(aligned[name], (time, value))
+            else
+                aligned[name] = [(time, value)]
+                push!(keys, name)
+            end
+        end
+    end
+
+    # Iterate through logical csv input file data frames
+    for log = logical
+        time = log[!, "time"]
+
+        # Loop through data frame's columns
+        for name = names(log)
+
+            # Check whether current column is an interest parameter, if so add to the data vector
+            value = get(log_interest, name, missing)
+            if value !== missing
+
+                # Extract column's data and pair it with corresponding timestamps
+                col = log[!, name]
+                aligned[value] = [(Float64(time[i]), Float64(col[i])) for i = 1:length(col)]
+                push!(keys, value)
+            end
+        end
+    end
+
+    # Convert all timestamps to weekly GPS time in seconds
+    for key = keys
+        col = aligned[key]
+        aligned[key] = [((col[i][1] + offset) / 10^6, col[i][2]) for i = 1:length(col)]
+    end
+
+    # Find the minimum timestep of all data columns
+    step = minimum([minimum([col[i + 1][1] - col[i][1] for i = 1:length(col) - 1]) for (_, col) = aligned])
+    # Find first timestamp of all data
+    start = minimum([col[1][1] for (_, col) = aligned])
+    # Find last
+    stop = maximum([col[end][1] for (_, col) = aligned])
+
+    # Generate time series for all time values between start and stop with step interval
+    time = collect(start:step:stop)
+    # Final interpolated data dictionary
+    data = Dict{String, Vector{Float64}}()
+    data["time"] = time
+
+    # Loop through all parameter keys, building interpolated data vector aligned with selected time values
+    for key = keys
+        col = Vector{Float64}()
+        values = aligned[key]
+
+        # Linearly interpolate between nearest two data points for each selected time value
+        i = 2
+        before = values[1]
+        after = values[2]
+        for t = start:step:stop
+            while t > after[1] && i != length(values)
+                i += 1
+                before = after
+                after = values[i]
+            end
+
+            if t < before[1]
+                push!(col, before[2])
+            elseif t > after[1]
+                push!(col, after[2])
+            else
+                # Linear interpolation
+                interp = ((t - before[1]) / (after[1] - before[1])) * (after[2] - before[2]) + before[2]
+                push!(col, interp)
+            end
+        end
+
+        # Add to final data dictionary
+        data[key] = col
+    end
+
+    # Associate tags with each timestep
+    data["event"] = [0 for i = 1:length(data["time"])]
+    for event = eachrow(tags)
+        id = event[1]
+        first = event[2]
+        last = event[3]
+        start_idx = floor(Int, (first - start) / step) + 1
+        end_idx = floor(Int, (last - start) / step) + 1
+        data["event"][start_idx:end_idx] .= id
+    end
+
+    # Calculate computed properties based on time-aligned data
+    computed_properties!(data)
+
+    # Print for debugging
+    #println(data)
+
+    # Return in same format as primary loading function
+    return (data, time, data["alpha_rad"], data["mach"], data["airspeed"], data["roll_rad"], data["pitch_rad"], 
+            data["P_rad"], data["Q_rad"], data["R_rad"], data["stab_pos_rad"],
+            data["press_alt"], data["temp"], data["left_fuel_qty"], data["right_fuel_qty"], data["V_ft_s"], data["rho"],
+            data["dyn_press"], data["fuel_weight"], data["total_weight"])
+end
+
+"""
     compute_Q_dot(Q::Vector{Float64}, time::Vector{Float64}) -> Vector{Float64}
 
 Compute the time derivative of the pitch rate Q (i.e., Q_dot).
