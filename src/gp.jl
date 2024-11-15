@@ -137,7 +137,7 @@ function GP_regression(X::Matrix{Float64}, y::Vector{Float64}, morelli_mean_func
     fx = f(X_train, noise_var)
     p_fx = AbstractGPs.posterior(fx, Y_train)
 
-    println("Optimized: ", logpdf(fx, Y_train))
+    # println("Optimized: ", logpdf(fx, Y_train))
 
     return p_fx, custom_mean_function, X_train, scaler, cm_scale_x, cm_unscale_x, scale_Cm, unscale_Cm, cm_scale_factor
 end

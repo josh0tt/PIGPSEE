@@ -307,6 +307,86 @@ function make_table(Cm_alpha_lin, Cm_δe_lin, Cm_q_lin, Cm_alpha_gp, Cm_δe_gp, 
 end
 
 """
+    compute_rmse(dps_model, omega_model, zeta_model, dps_emp, omega_emp, zeta_emp; dp_tol=40)
+
+Computes the root-mean-square error (RMSE) between empirical and model data for short period frequency and damping.
+
+# Arguments
+- `dps_model: Vector of dynamic pressure values from the model.
+- `omega_model`: Vector of frequency values corresponding to `dps_model`.
+- `zeta_model`: Vector of damping values corresponding to `dps_model`.
+- `dps_emp`: Vector of dynamic pressure values from empirical data.
+- `omega_emp`: Vector of frequency values corresponding to `dps_emp`.
+- `zeta_emp`: Vector of damping ratio values corresponding to `dps_emp`.
+- `dp_tol` (optional): Tolerance for grouping empirical data by dynamic pressure. Defaults to 40.
+
+# Returns
+A tuple `(rmse_data_omega, rmse_data_zeta, rmse_pred_omega, rmse_pred_zeta)` where:
+- `rmse_data_omega`: Average RMSE of the empirical frequency values grouped by dynamic pressure.
+- `rmse_data_zeta`: Average RMSE of the empirical damping values grouped by dynamic pressure.
+- `rmse_pred_omega`: RMSE between empirical and model frequency values.
+- `rmse_pred_zeta`: RMSE between empirical and model damping values.
+
+# Details
+1. The function first computes `rmse_data` by grouping empirical data based on unique dynamic pressure values.
+   - For each dynamic pressure group, it calculates the RMSE of frequency and damping.
+2. The function then computes `rmse_pred` by comparing the model predictions with the empirical data.
+   - For each empirical data point, the nearest dynamic pressure value in the model data is found, 
+     and the corresponding model predictions are used to calculate the RMSE.
+"""
+function compute_rmse(dps_model, omega_model, zeta_model, dps_emp, omega_emp, zeta_emp, dp_tol=40)
+    # First, compute rmse_data by grouping empirical data by dynamic pressure
+    unique_dps = unique(dps_emp)
+    rmse_list_omega = []
+    rmse_list_zeta = []
+
+    for dp in unique_dps
+        # Find indices where dynamic pressure matches
+        indices = findall(x -> abs.(x .- dp) .< dp_tol, dps_emp)
+        if length(indices) > 1
+            # Multiple measurements at this dynamic pressure
+            omega_vals = omega_emp[indices]
+            zeta_vals = zeta_emp[indices]
+            # Compute mean values
+            omega_mean = mean(omega_vals)
+            zeta_mean = mean(zeta_vals)
+            # Compute RMSE for omega and zeta
+            omega_rmse = sqrt(mean((omega_vals .- omega_mean).^2))
+            zeta_rmse = sqrt(mean((zeta_vals .- zeta_mean).^2))
+            # Collect RMSEs
+            push!(rmse_list_omega, omega_rmse)
+            push!(rmse_list_zeta, zeta_rmse)
+        end
+    end
+
+    # Average RMSEs for the empirical data
+    if length(rmse_list_omega) == 0
+        rmse_data_omega = NaN
+        rmse_data_zeta = NaN
+    else
+        rmse_data_omega = mean(rmse_list_omega)
+        rmse_data_zeta = mean(rmse_list_zeta)
+    end
+
+    # Now compute rmse_pred by comparing model predictions to empirical data
+    omega_model_at_emp = zeros(length(dps_emp))
+    zeta_model_at_emp = zeros(length(dps_emp))
+
+    for (i, dp_emp) in enumerate(dps_emp)
+        # Find the closest dynamic pressure in the model data
+        idx = findmin(abs.(dps_model .- dp_emp))[2]
+        omega_model_at_emp[i] = omega_model[idx]
+        zeta_model_at_emp[i] = zeta_model[idx]
+    end
+
+    # Compute RMSE between empirical data and model predictions
+    rmse_pred_omega = sqrt(mean((omega_emp .- omega_model_at_emp).^2))
+    rmse_pred_zeta = sqrt(mean((zeta_emp .- zeta_model_at_emp).^2))
+
+    return rmse_data_omega, rmse_data_zeta, rmse_pred_omega, rmse_pred_zeta
+end
+
+"""
     plot_results(dps_emp::Vector{Float64}, ω_sps_emp::Vector{Float64}, ζ_sps_emp::Vector{Float64},
                  machs_emp::Vector{Float64}, dps::Vector{Float64}, μf_unscaled::Function,
                  Cz_μf_unscaled::Function, μf_scaled::Function, σf_scaled::Function,
@@ -351,6 +431,11 @@ function plot_results(dps_emp, ω_sps_emp, ζ_sps_emp, machs_emp, dps, μf_unsca
     data_path = joinpath(@__DIR__, "data")
     figure_path = joinpath(@__DIR__, "figures")
 
+    all_rmse_data_omega = []
+    all_rmse_data_zeta = []
+    all_rmse_pred_omega = []
+    all_rmse_pred_zeta = []
+
     for mach in [0.5, 0.7, 0.9, 1.08]
         ω_sps_gp, ζ_sps_gp, ω_sps_lin, ζ_sps_lin, U1s, Z_alphas, M_qs, M_alphas = ω_sp_plot(dps, mach, μf_unscaled, Cz_μf_unscaled,
                                                               μf_scaled, σf_scaled, Cz_μf_scaled, Cz_σf_scaled,
@@ -366,6 +451,16 @@ function plot_results(dps_emp, ω_sps_emp, ζ_sps_emp, machs_emp, dps, μf_unsca
             label="GP $(mach)M")
         Plots.plot!(plt1, dps[valid], ω_sps_lin[valid], label="Linear Model $(mach)M", linestyle=:dash)
 
+        ω_sps_emp_valid = ω_sps_emp[abs.(machs_emp .- mach) .< 0.1]
+        ζ_sps_emp_valid = ζ_sps_emp[abs.(machs_emp .- mach) .< 0.1]
+        dps_emp_valid = dps_emp[abs.(machs_emp .- mach) .< 0.1]
+
+        rmse_data_omega, rmse_data_zeta, rmse_pred_omega, rmse_pred_zeta = compute_rmse(dps[valid], ω_sps_gp[valid], ζ_sps_gp[valid], dps_emp_valid, ω_sps_emp_valid, ζ_sps_emp_valid)
+        push!(all_rmse_data_omega, rmse_data_omega)
+        push!(all_rmse_data_zeta, rmse_data_zeta)
+        push!(all_rmse_pred_omega, rmse_pred_omega)
+        push!(all_rmse_pred_zeta, rmse_pred_zeta)
+
         df = DataFrame(dps=dps, ω_sps_gp=ω_sps_gp, ω_sps_lin=ω_sps_lin, ζ_sps_gp=ζ_sps_gp, ζ_sps_lin=ζ_sps_lin) 
         CSV.write(data_path * "/sp_results_$(mach)M.csv", df)
 
@@ -379,6 +474,18 @@ function plot_results(dps_emp, ω_sps_emp, ζ_sps_emp, machs_emp, dps, μf_unsca
         push!(all_ζ_sps_lin, ζ_sps_lin)
     end
     scatter!(plt1, dps_emp, ω_sps_emp, marker_z=machs_emp, label="Empirical Data", ylims=(0, 1.0))
+
+    # Make a table of results where the rows are mach numbers and the columns are RMSE values
+    rmse_matrix = Matrix{Any}(undef, 4, 5)
+    machs = [0.5, 0.7, 0.9, 1.08]
+    for i in 1:4
+        rmse_matrix[i, 1] = machs[i]
+        rmse_matrix[i, 2] = all_rmse_pred_omega[i] 
+        rmse_matrix[i, 3] = all_rmse_data_omega[i]
+        rmse_matrix[i, 4] = all_rmse_pred_zeta[i]
+        rmse_matrix[i, 5] = all_rmse_data_zeta[i]
+    end
+    pretty_table(round.(rmse_matrix, digits=3); header=["Mach", "RMSE Pred Omega", "RMSE Data Omega", "RMSE Pred Zeta", "RMSE Data Zeta"])
 
 
     # Plot ζ_sp vs Dynamic Pressure
