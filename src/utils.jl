@@ -187,7 +187,7 @@ function load_and_preprocess_data_pixhawk(
             for (gs, track) = zip(data["gs"], data["track"])
         ]
         #println(airspeed_vectors)
-        data["airspeed"] = [sqrt(v[1]^2 + v[2]^2 + (vertical_speed[i] / knot_to_ft_s)^2) for i, v = enumerate(airspeed_vectors)]
+        data["airspeed"] = [sqrt(v[1]^2 + v[2]^2 + (vertical_speed[i] / knot_to_ft_s)^2) for (i, v) = enumerate(airspeed_vectors)]
 
         # Compute alpha
         climb_angle = atan.(vertical_speed, data["airspeed"] .* knot_to_ft_s)
