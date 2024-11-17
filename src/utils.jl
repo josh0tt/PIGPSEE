@@ -125,14 +125,13 @@ function load_and_preprocess_data_pixhawk(
     constants_frame = CSV.read(joinpath.(@__DIR__, "data", "pixhawk", constants_file), DataFrame)
     constants = Dict(name => constants_frame[!, name][1] for name = names(constants_frame))
 
-
     # Parameters of interest in pixhawk data file
     # Format (RowName, [(Col1Index, Param1Alias), (Col2Index, Param2Alias)...])
     dis_interest = Dict{String, Vector{Tuple{Int64, String}}}([
         ("IMU", [(1, "P"), (2, "Q"), (3, "R"), (6, "z_accel")]),
         ("ATT", [(2, "roll"), (4, "pitch")]),
         ("BARO", [(1, "press_alt")]),
-        ("GPS", [(9, "gs"), (10, "track")])
+        ("GPS", [(8, "gps_alt"), (9, "gs"), (10, "track")])
     ])
 
     # Parameters of interest in the logical csv input files, regardless of which file they're in
@@ -166,6 +165,12 @@ function load_and_preprocess_data_pixhawk(
         data["Q_rad"] .-= mean(data["Q_rad"][1:10])
         data["R_rad"] .-= mean(data["R_rad"][1:10])
 
+        # Vertical speed from GPS
+        vertical_speed = vcat([0], [
+            ((data["gps_alt"][i + 1] - data["gps_alt"][i]) / (data["time"][i + 1] - data["time"][i])) * mps_to_ft_s
+            for i = 1:(length(data["gps_alt"])-1)
+        ])
+
         # Calculate airspeed from gs and wind
         wind_run = [
             [data["gs"][i] * cosd(data["track"][i]), data["gs"][i] * sind(data["track"][i])]
@@ -182,7 +187,22 @@ function load_and_preprocess_data_pixhawk(
             for (gs, track) = zip(data["gs"], data["track"])
         ]
         #println(airspeed_vectors)
-        data["airspeed"] = [sqrt(v[1]^2 + v[2]^2) for v = airspeed_vectors]
+        data["airspeed"] = [sqrt(v[1]^2 + v[2]^2 + (vertical_speed[i] / knot_to_ft_s)^2) for i, v = enumerate(airspeed_vectors)]
+
+        # Compute alpha
+        climb_angle = atan.(vertical_speed, data["airspeed"] .* knot_to_ft_s)
+        data["alpha_rad"] = data["pitch_rad"] .- climb_angle
+        """
+        deviations = [
+            abs(climb_angle[i + 1] - climb_angle[i])
+            for i = 1:(length(climb_angle) - 1)
+        ]
+        #println(data["pitch"][1:1000:end])
+        #println(climb_angle[1:1000:end])
+        println(mean(deviations))
+        println(std(deviations))
+        println(percentile(deviations, 99.9))
+        """
 
         # Compute dynamic pressure from density and airspeed in ft/s
         data["V_ft_s"] = data["airspeed"] .* knot_to_ft_s
@@ -229,7 +249,7 @@ function load_and_preprocess_data_pixhawk(
             end
         end
     end
-
+    
     # Iterate through logical csv input file data frames
     for log = logical
         time = log[!, "time"]
