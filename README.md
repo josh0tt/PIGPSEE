@@ -1,5 +1,4 @@
-[![arXiv](https://img.shields.io/badge/PIGPSEE:%20arXiv-2306.00249-b31b1b.svg)](https://arxiv.org/abs/2501.01000)
-
+[![arXiv](https://img.shields.io/badge/PIGPSEE:%20arXiv-2501.01000-b31b1b.svg)](https://arxiv.org/abs/2501.01000)
 
 # Physics-informed Gaussian processes for Safe Envelope Expansion (PIGPSEE)
 
