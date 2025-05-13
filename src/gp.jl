@@ -232,3 +232,39 @@ function compute_Cz_alpha(Z::Vector{Float64}, X::Matrix{Float64}, left_fuel_qty:
 
     return μf_unscaled_cz, σf_unscaled_cz, μf_scaled_cz, σf_scaled_cz, Z_alpha_gp, Z_alpha_lin, Cz_alpha_lin, cz_scale_x, cz_unscale_x, cz_scale_factor, scaler_cz
 end
+
+"""
+    compute_force_coefficients(data::DataFrame, X::Matrix{Float64}, left_fuel_qty::Vector{Float64},
+                              right_fuel_qty::Vector{Float64}, dyn_press::Vector{Float64}, S::Float64,
+                              trim_state::Vector{Float64}) -> (C_X, C_Y, C_Z)
+
+Compute the aerodynamic force coefficients C_X, C_Y, and C_Z from accelerations.
+
+# Arguments
+- `data`: DataFrame containing the flight data.
+- `X`: Design matrix (predictor variables).
+- `left_fuel_qty`, `right_fuel_qty`: Fuel quantities (lbs).
+- `dyn_press`: Dynamic pressure values.
+- `S`: Wing reference area (ft²).
+- `trim_state`: State vector at trim condition.
+
+# Returns
+- `C_X`, `C_Y`, `C_Z`: Force coefficients.
+"""
+function compute_force_coefficients(data::DataFrame, X::Matrix{Float64}, left_fuel_qty::Vector{Float64},
+                                  right_fuel_qty::Vector{Float64}, dyn_press::Vector{Float64}, S::Float64,
+                                  trim_state::Vector{Float64})
+    m = empty_weight .+ left_fuel_qty .+ right_fuel_qty
+
+    # Compute forces from accelerations
+    X_force = g .* data[!, "NX_LONG_ACCEL"] .* m
+    Y_force = g .* data[!, "NY_LATERAL_ACCEL"] .* m
+    Z_force = -g .* data[!, "NZ_NORMAL_ACCEL"] .* m
+
+    # Compute force coefficients
+    C_X = X_force ./ (dyn_press .* S)
+    C_Y = Y_force ./ (dyn_press .* S)
+    C_Z = Z_force ./ (dyn_press .* S)
+
+    return C_X, C_Y, C_Z
+end

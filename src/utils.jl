@@ -643,3 +643,65 @@ function CM_prediction_plot(data, event_numbers, time, X, Θ, μf_unscaled, σf_
         CSV.write(data_path * "/C_m_prediction_$(event_number).csv", df)
     end
 end
+
+"""
+    force_coefficient_plot(data::DataFrame, event_numbers::Vector{Int}, time::Vector{Float64},
+                          C_X::Vector{Float64}, C_Y::Vector{Float64}, C_Z::Vector{Float64})
+
+Plot the force coefficients (C_X, C_Y, C_Z) over time for each event.
+
+# Arguments
+- `data`: DataFrame containing the data.
+- `event_numbers`: Vector of event numbers to plot.
+- `time`: Vector of time stamps.
+- `C_X`, `C_Y`, `C_Z`: Force coefficients.
+"""
+function force_coefficient_plot(data::DataFrame, event_numbers::Vector{Int}, time::Vector{Float64},
+                              C_X::Vector{Float64}, C_Y::Vector{Float64}, C_Z::Vector{Float64})
+    # find index corresponding to the first time event starts
+    event_start_idxs = [findfirst(data[!, "EVENT"] .== event_number) for event_number in event_numbers]
+    event_end_idxs = [findlast(data[!, "EVENT"] .== event_number) for event_number in event_numbers]
+    gr()
+
+    data_path = joinpath(@__DIR__, "data")
+    figure_path = joinpath(@__DIR__, "figures")
+    
+    for (ii, event_number) in enumerate(event_numbers)
+        # Create a figure with three subplots
+        p = Plots.plot(layout=(3,1), size=(800, 1200))
+
+        # Plot each force coefficient
+        Plots.plot!(p[1], time[event_start_idxs[ii]:event_end_idxs[ii]], 
+              C_X[event_start_idxs[ii]:event_end_idxs[ii]], 
+              label="C_X", 
+              title="Axial Force Coefficient", 
+              xlabel="Time (s)", 
+              ylabel=L"C_X")
+        
+        Plots.plot!(p[2], time[event_start_idxs[ii]:event_end_idxs[ii]], 
+              C_Y[event_start_idxs[ii]:event_end_idxs[ii]], 
+              label="C_Y", 
+              title="Side Force Coefficient", 
+              xlabel="Time (s)", 
+              ylabel=L"C_Y")
+        
+        Plots.plot!(p[3], time[event_start_idxs[ii]:event_end_idxs[ii]], 
+              C_Z[event_start_idxs[ii]:event_end_idxs[ii]], 
+              label="C_Z", 
+              title="Normal Force Coefficient", 
+              xlabel="Time (s)", 
+              ylabel=L"C_Z")
+
+        # Save the plot
+        Plots.savefig(p, figure_path * "/force_coefficients_$(event_number).pdf")
+
+        # Save the data
+        df = DataFrame(
+            time=time[event_start_idxs[ii]:event_end_idxs[ii]],
+            C_X=C_X[event_start_idxs[ii]:event_end_idxs[ii]],
+            C_Y=C_Y[event_start_idxs[ii]:event_end_idxs[ii]],
+            C_Z=C_Z[event_start_idxs[ii]:event_end_idxs[ii]]
+        )
+        CSV.write(data_path * "/force_coefficients_$(event_number).csv", df)
+    end
+end

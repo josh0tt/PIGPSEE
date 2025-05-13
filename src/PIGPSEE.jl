@@ -82,10 +82,10 @@ function run()
     Θ5_lin = Θ[5]
     Cm_q_lin = Θ5_lin * 2 * U1 / c̄
 
-    # Gaussian Process Regression
+    # Gaussian Process Regression for moment coefficient
     p_fx, custom_mean_function, X_train, scaler, cm_scale_x, cm_unscale_x, scale_Cm, unscale_Cm, cm_scale_factor = GP_regression(X, C_m, morelli_mean)
 
-    # Define mean function and its gradient
+    # Define mean function and its gradient for moment coefficient
     μf_unscaled(x) = unscale_Cm(mean(p_fx([cm_scale_x(x)]))[1])
     μf_scaled(x) = mean(p_fx([x]))[1]
     σf_unscaled(x) = sqrt.(var(p_fx([cm_scale_x(x)]))[1]) / cm_scale_factor
@@ -98,6 +98,10 @@ function run()
     Cm_δe_gp = grad_μ[8]
     Cm_q_gp = grad_μ[5] * 2 * U1 / c̄
 
+    # Compute force coefficients
+    C_X, C_Y, C_Z = compute_force_coefficients(data, X, left_fuel_qty, right_fuel_qty, dyn_press, S, trim_state)
+    force_coefficient_plot(data, event_numbers, time, C_X, C_Y, C_Z)
+
     # Compute C_z_alpha
     Cz_μf_unscaled, Cz_σf_unscaled, Cz_μf_scaled, Cz_σf_scaled, Z_alpha_gp, Z_alpha_lin, Cz_alpha_lin, cz_scale_x, cz_unscale_x, cz_scale_factor, cz_scaler = compute_Cz_alpha(data[!, "NZ_NORMAL_ACCEL"], X, left_fuel_qty, right_fuel_qty, dyn_press, S, trim_state)
 
@@ -109,7 +113,7 @@ function run()
     ω_sps_emp = [0.72, 0.38, 0.9, 0.86, 0.64, 0.46, 0.34, 0.66, 0.47, 0.34, 0.65, 0.49, 0.37, 0.37, 0.36, 0.38, 0.83, 0.42, 0.67, 0.56, 0.83]
     ζ_sps_emp = [0.32, 0.29, 0.22, 0.32, 0.36, 0.31, 0.31, 0.38, 0.34, 0.35, 0.33, 0.31, 0.30, 0.23, 0.27, 0.26, 0.35, 0.18, 0.30, 0.13, 0.17]
 
-    dps = collect(LinRange(100, 900, 100))#collect(LinRange(100, 900, 100))
+    dps = collect(LinRange(100, 900, 100))
 
     # Plot results
     plot_results(dps_emp, ω_sps_emp, ζ_sps_emp, machs_emp, dps, μf_unscaled, Cz_μf_unscaled,
@@ -136,6 +140,7 @@ export
     morelli_mean,
     make_table,
     compute_Cz_alpha,
+    compute_force_coefficients,
     plot_results,
     surface_3D_plot,
     CM_prediction_plot
