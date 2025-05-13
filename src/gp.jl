@@ -167,9 +167,13 @@ Compute the aerodynamic force coefficient C_Z and its derivative with respect to
 - `scaler_cz`: Scaler object used for C_Z data normalization.
 """
 function compute_Cz_alpha(Z::Vector{Float64}, X::Matrix{Float64}, left_fuel_qty::Vector{Float64}, right_fuel_qty::Vector{Float64}, dyn_press::Vector{Float64}, S::Float64, trim_state::Vector{Float64})
-    m = empty_weight .+ left_fuel_qty .+ right_fuel_qty
-    Z_force = -g .* Z .* m
+    weight_lbf = empty_weight .+ left_fuel_qty .+ right_fuel_qty   # lbf
+    mass_slugs = weight_lbf ./ g                                   # slugs 
+
+    Z_force = -Z .* weight_lbf    
     C_Z = Z_force ./ (dyn_press .* S)
+
+
 
     # Linear model fitting
     X_cz = X
@@ -227,8 +231,8 @@ function compute_Cz_alpha(Z::Vector{Float64}, X::Matrix{Float64}, left_fuel_qty:
     Cz_δe_gp = grad_μ_cz[8]
     Cz_q_gp = grad_μ_cz[5]
 
-    Z_alpha_gp = Cz_alpha_gp * dyn_press[1] * S / m[1]
-    Z_alpha_lin = Cz_alpha_lin * dyn_press[1] * S / m[1]
+    Z_alpha_gp = Cz_alpha_gp * dyn_press[1] * S / mass_slugs[1]
+    Z_alpha_lin = Cz_alpha_lin * dyn_press[1] * S / mass_slugs[1]
 
     return μf_unscaled_cz, σf_unscaled_cz, μf_scaled_cz, σf_scaled_cz, Z_alpha_gp, Z_alpha_lin, Cz_alpha_lin, cz_scale_x, cz_unscale_x, cz_scale_factor, scaler_cz
 end
@@ -254,12 +258,17 @@ Compute the aerodynamic force coefficients C_X, C_Y, and C_Z from accelerations.
 function compute_force_coefficients(data::DataFrame, X::Matrix{Float64}, left_fuel_qty::Vector{Float64},
                                   right_fuel_qty::Vector{Float64}, dyn_press::Vector{Float64}, S::Float64,
                                   trim_state::Vector{Float64})
-    m = empty_weight .+ left_fuel_qty .+ right_fuel_qty
+    
+    weight_lbf = empty_weight .+ left_fuel_qty .+ right_fuel_qty      # lbf
+    X_force = data[!, "NX_LONG_ACCEL"] .* weight_lbf                             # lbf
+    Y_force = data[!, "NY_LATERAL_ACCEL"] .* weight_lbf
+    Z_force = -data[!, "NZ_NORMAL_ACCEL"] .* weight_lbf
 
-    # Compute forces from accelerations
-    X_force = g .* data[!, "NX_LONG_ACCEL"] .* m
-    Y_force = g .* data[!, "NY_LATERAL_ACCEL"] .* m
-    Z_force = -g .* data[!, "NZ_NORMAL_ACCEL"] .* m
+    # debug: plot raw NX_LONG_ACCEL and X_force
+    p1 = Plots.plot(data[!, "NZ_NORMAL_ACCEL"], label="NZ_NORMAL_ACCEL", title="NZ_NORMAL_ACCEL and Z_force")
+    p2 = Plots.plot(Z_force, label="Z_force", title="Z_force")
+    Plots.plot(p1, p2, layout=(2,1))
+    Plots.savefig("debug_force_coefficients.pdf")
 
     # Compute force coefficients
     C_X = X_force ./ (dyn_press .* S)
